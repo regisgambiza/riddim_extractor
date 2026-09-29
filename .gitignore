@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# State files
+*.json
+
+# Test folders
+testfolders/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

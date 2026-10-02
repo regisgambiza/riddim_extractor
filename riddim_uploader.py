@@ -374,7 +374,7 @@ class UploaderWindow(QMainWindow):
         )
         for i, (folder, year) in enumerate(list(self.mappings.items())[:5]):
             status = "✓" if (self.source_dir / folder).exists() else "✗"
-            summary += f"  {status} {folder} → {self.dest_dir / year}/{folder}\n"
+            summary += f"  {status} {folder} → {self.dest_dir / str(year)}/{folder}\n"
 
         if len(self.mappings) > 5:
             summary += f"  ...and {len(self.mappings) - 5} more\n"
@@ -449,7 +449,7 @@ class UploaderWindow(QMainWindow):
 
                 try:
                     # Direct copy/move from source to dest/year/folder
-                    year_dir = self.dest_dir / year
+                    year_dir = self.dest_dir / str(year)
                     year_dir.mkdir(parents=True, exist_ok=True)
                     target = year_dir / folder_name
 

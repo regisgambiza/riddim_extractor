@@ -73,6 +73,15 @@ from PySide6.QtWidgets import (
 )
 
 # --------------------------------------------------------------------------- #
+# Mapping-Based Uploader import
+# --------------------------------------------------------------------------- #
+try:
+    from riddim_uploader import run_uploader as run_mapping_uploader
+    MAPPING_UPLOADER_AVAILABLE = True
+except ImportError:
+    MAPPING_UPLOADER_AVAILABLE = False
+
+# --------------------------------------------------------------------------- #
 # Dependency checking and auto-install
 # --------------------------------------------------------------------------- #
 def check_and_install_dependencies():
@@ -196,6 +205,7 @@ class ExtractorCore:
         self.failed: set[str] = set()
         self.failed_reasons: dict[str, str] = {}
         self.copy_only = copy_only
+        self.imported_years: dict[str, int] = {}
 
         self._load_state()
 
@@ -229,6 +239,45 @@ class ExtractorCore:
             tmp_path = Path(tmp.name)
         tmp_path.replace(self.state_file)
 
+    # ---- year mapping import ---------------------------------------------
+    def load_year_mapping(self, filepath: Path) -> dict:
+        """Load year mappings from a JSON file exported by riddim_agent.
+
+        Returns a dict with:
+        - "loaded": number of mappings loaded
+        - "skipped": number of folders already in done/failed state
+        - "warnings": list of warning messages for skipped folders
+        """
+        import json
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        mappings = data.get("mappings", {})
+        if not isinstance(mappings, dict):
+            raise ValueError("Invalid format: 'mappings' must be a dict")
+
+        loaded = 0
+        skipped = 0
+        warnings = []
+
+        for folder_name, year in mappings.items():
+            resolved_path = str((self.source_dir / folder_name).resolve())
+
+            if resolved_path in self.done:
+                warnings.append(f"Skipped '{folder_name}': already processed (in done)")
+                skipped += 1
+                continue
+            if resolved_path in self.failed:
+                warnings.append(f"Skipped '{folder_name}': previously failed (in failed)")
+                skipped += 1
+                continue
+
+            self.imported_years[folder_name] = int(year)
+            loaded += 1
+
+        return {"loaded": loaded, "skipped": skipped, "warnings": warnings}
+
     # ---- helpers ---------------------------------------------------------
     @staticmethod
     def has_audio_files(folder: Path) -> bool:
@@ -240,6 +289,13 @@ class ExtractorCore:
         return False
 
     def get_folder_year(self, folder: Path) -> str:
+        """Return year, checking imported mappings first then audio metadata."""
+        folder_name = folder.name
+        if folder_name in self.imported_years:
+            return str(self.imported_years[folder_name])
+        return self._detect_year_from_metadata(folder)
+
+    def _detect_year_from_metadata(self, folder: Path) -> str:
         """Read year metadata from audio files; returns most common year or 'Unknown'."""
         if not folder.is_dir():
             return "Unknown"
@@ -679,6 +735,20 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        self.btn_import_years = QPushButton("📥 Import Years")
+        self.btn_import_years.setToolTip("Import year mappings from riddim_agent's year_mapping.json")
+        self.btn_import_years.clicked.connect(self.import_year_mappings)
+        toolbar.addWidget(self.btn_import_years)
+
+        # Mapping-based upload button
+        if MAPPING_UPLOADER_AVAILABLE:
+            self.btn_upload_mappings = QPushButton("📤 Upload by Mappings")
+            self.btn_upload_mappings.setToolTip("Upload folders using external year mappings")
+            self.btn_upload_mappings.clicked.connect(self._launch_mapping_uploader)
+            toolbar.addWidget(self.btn_upload_mappings)
+
+        toolbar.addSeparator()
+
         self.btn_settings = QPushButton("⚙ Settings")
         self.btn_settings.clicked.connect(self.show_settings)
         toolbar.addWidget(self.btn_settings)
@@ -1099,6 +1169,90 @@ class MainWindow(QMainWindow):
 
         self._append_log("INFO", f"Processing {len(candidates)} folder(s) from source directory...")
         self._start_processing(candidates, operation="batch")
+
+    def import_year_mappings(self):
+        """Open file dialog to import year mappings from riddim_agent."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Year Mapping File",
+            str(self.state_file.parent),
+            "JSON files (*.json);;All files (*)"
+        )
+        if not filepath:
+            return
+
+        try:
+            result = self.core.load_year_mapping(Path(filepath))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load year mapping file:\n{e}")
+            return
+
+        # Show preview dialog
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox, QTextEdit
+        from PySide6.QtCore import Qt
+
+        preview = QDialog(self)
+        preview.setWindowTitle("Import Year Mappings Preview")
+        preview.setMinimumWidth(500)
+        preview.setMinimumHeight(300)
+
+        layout = QVBoxLayout(preview)
+
+        layout.addWidget(QLabel(f"Loaded: {result['loaded']} mappings"))
+        layout.addWidget(QLabel(f"Skipped (already processed/failed): {result['skipped']} mappings"))
+
+        if result['warnings']:
+            layout.addWidget(QLabel("Warnings:"))
+            warnings_text = QTextEdit()
+            warnings_text.setReadOnly(True)
+            warnings_text.setMaximumHeight(100)
+            warnings_text.setPlainText("\n".join(result['warnings'][:10]))  # Limit to first 10 warnings
+            layout.addWidget(warnings_text)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(preview.accept)
+        buttons.rejected.connect(preview.reject)
+        layout.addWidget(buttons)
+
+        if preview.exec() == QDialog.DialogCode.Accepted:
+            # Apply the mappings: add to done state
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            mappings = data.get("mappings", {})
+
+            # Add imported folders to done state (mark as processed)
+            newly_done = 0
+            for folder_name in mappings.keys():
+                resolved_path = str((self.source_dir / folder_name).resolve())
+                if resolved_path not in self.core.done and resolved_path not in self.core.failed:
+                    self.core.done.add(resolved_path)
+                    newly_done += 1
+
+            # Save the updated state
+            self.core.save_state()
+
+            # Refresh UI
+            self._load_tables()
+            self._update_counts()
+            self._append_log("INFO", f"Imported {newly_done} year mappings and marked folders as processed")
+            QMessageBox.information(self, "Success", f"Successfully imported {newly_done} year mappings.")
+        else:
+            # User cancelled - nothing to do, mappings were already loaded into self.imported_years
+            # but we don't want to process them since user cancelled
+            pass
+
+    def _launch_mapping_uploader(self):
+        """Launch the mapping-based upload tool."""
+        if not MAPPING_UPLOADER_AVAILABLE:
+            QMessageBox.critical(
+                self,
+                "Error",
+                "Mapping uploader module not available.",
+            )
+            return
+        run_mapping_uploader(QApplication.instance(), self.core)
 
     def _start_processing(self, candidates: list[Path], operation: str = "single"):
         """Start processing folders in a background thread.

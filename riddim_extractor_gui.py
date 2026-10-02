@@ -73,15 +73,6 @@ from PySide6.QtWidgets import (
 )
 
 # --------------------------------------------------------------------------- #
-# Mapping-Based Uploader import
-# --------------------------------------------------------------------------- #
-try:
-    from riddim_uploader import run_uploader as run_mapping_uploader
-    MAPPING_UPLOADER_AVAILABLE = True
-except ImportError:
-    MAPPING_UPLOADER_AVAILABLE = False
-
-# --------------------------------------------------------------------------- #
 # Dependency checking and auto-install
 # --------------------------------------------------------------------------- #
 def check_and_install_dependencies():
@@ -741,11 +732,10 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.btn_import_years)
 
         # Mapping-based upload button
-        if MAPPING_UPLOADER_AVAILABLE:
-            self.btn_upload_mappings = QPushButton("📤 Upload by Mappings")
-            self.btn_upload_mappings.setToolTip("Upload folders using external year mappings")
-            self.btn_upload_mappings.clicked.connect(self._launch_mapping_uploader)
-            toolbar.addWidget(self.btn_upload_mappings)
+        self.btn_upload_mappings = QPushButton("Upload by Mappings")
+        self.btn_upload_mappings.setToolTip("Upload folders using external year mappings")
+        self.btn_upload_mappings.clicked.connect(self._launch_mapping_uploader)
+        toolbar.addWidget(self.btn_upload_mappings)
 
         toolbar.addSeparator()
 
@@ -1245,14 +1235,8 @@ class MainWindow(QMainWindow):
 
     def _launch_mapping_uploader(self):
         """Launch the mapping-based upload tool."""
-        if not MAPPING_UPLOADER_AVAILABLE:
-            QMessageBox.critical(
-                self,
-                "Error",
-                "Mapping uploader module not available.",
-            )
-            return
-        run_mapping_uploader(QApplication.instance(), self.core)
+        from riddim_uploader import run_uploader
+        self.uploader = run_uploader(QApplication.instance(), self.core)
 
     def _start_processing(self, candidates: list[Path], operation: str = "single"):
         """Start processing folders in a background thread.
